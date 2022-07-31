@@ -2,7 +2,7 @@ Short:        ProTracker player w/ support for ext. sfx
 Author:       Frank Wille
 Uploader:     frank@phoenix.owl.de
 Type:         mus/play
-Version:      5.3
+Version:      6.0
 Requires:     Assembler
 Architecture: m68k-amigaos
 
@@ -66,7 +66,15 @@ b) By defining the SDATA symbol ptplayer.asm assembles into a code
    It uses the NEAR directive, which might work with vasm and PhxAss only.
 
 
-2. Common usage
+2. Select minimal or full ptplayer
+
+ptplayer builds with all features by default. By defining the symbol
+MINIMAL you get just a standard Protracker player, without the ability
+to insert external sound effects or to control the master or sample
+volumes. This approximately halves the code size.
+
+
+3. Common usage
 
 a) Install a Level-6 interrupt handler for CIA-B timer interrupts
    by calling mt_install_cia(). Do this once, during program init.
@@ -82,7 +90,7 @@ c) Set the byte-variable mt_Enable to non-zero to start the replay.
 d) Stop playing and set all volumes to zero by calling mt_end().
 
 e) Finally, in the cleanup routine of your program, remove the Level-6
-   interrupt handler again and reset all CIA register by calling
+   interrupt handler again and reset all CIA registers by calling
    mt_remove_cia().
 
 
@@ -115,10 +123,10 @@ _mt_end(a6=CUSTOM)
 _mt_soundfx(a6=CUSTOM, a0=SamplePointer,
             d0=SampleLength.w, d1=SamplePeriod.w, d2=SampleVolume.w)
   Request playing of an external sound effect on the most unused channel.
-  This function is for compatibility with the old API only!
-  You should call _mt_playfx instead.
+  This function is for compatibility with the old API only.
+  You should call _mt_playfx instead. !MINIMAL only.
 
-_mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
+channelStatus = _mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
   Request playing of a prioritized external sound effect, either on a
   fixed channel or on the most unused one.
   Structure layout of SfxStructure:
@@ -133,20 +141,31 @@ _mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
   the older sample is replaced.
   The chosen channel is blocked for music until the effect has
   completely been replayed.
+  RETURN VALUES: A pointer to a channel-status structure (see ptplayer.h)
+  when the sample is scheduled for playing, and NULL when the request was
+  ignored.
   NOTE: Always make sure the first two bytes of your sound effect sample
   are zero!
+  !MINIMAL only.
 
 _mt_musicmask(a6=CUSTOM, d0=ChannelMask.b)
   Bits set in the mask define which specific channels are reserved
   for music only. Set bit 0 for channel 0, ..., bit 3 for channel 3.
   When calling _mt_soundfx or _mt_playfx with automatic channel selection
   (sfx_cha=-1) then these masked channels will never be picked.
-  The mask defaults to 0.
+  The mask defaults to 0. !MINIMAL only
 
 _mt_mastervol(a6=CUSTOM, d0=MasterVolume.w)
   Set a master volume from 0 to 64 for all music channels.
   Note that the master volume does not affect the volume of external
-  sound effects (which is desired).
+  sound effects (which is desired). !MINIMAL only.
+
+_mt_samplevol(d0=SampleNumber.w, d1=Volume.b)
+  Redefine a sample's volume. May also be done while the song is playing.
+  Warning: Does not check arguments for valid range! You must have done
+  _mt_init before calling this function!
+  The new volume is persistent. Even when the song is restarted.
+  !MINIMAL only.
 
 _mt_music(a6=CUSTOM)
   The replayer routine. Is called automatically after _mt_install_cia.
@@ -159,13 +178,6 @@ _mt_Enable
   Note that you can still play sound effects, while music is stopped.
   It is set to 0 by _mt_install_cia.
 
-_mt_SongEnd
-  Set to -1 ($ff) if you want the song to stop automatically when
-  the last position has been played (clears _mt_Enable). Otherwise, the
-  song is restarted and _mt_SongEnd is incremented to count the restarts.
-  It is reset to 0 after _mt_init.
-  BUGS: Automatic stop with $ff doesn't work perfectly yet.
-
 _mt_E8Trigger
   This byte reflects the value of the last E8 command.
   It is reset to 0 after _mt_init.
@@ -174,6 +186,7 @@ _mt_MusicChannels
   This byte defines the number of channels which should be dedicated
   for playing music. So sound effects will never use more
   than 4 - _mt_MusicChannels channels at once. Defaults to 0.
+  !MINIMAL only.
 
 
 There is also a header file for C compilers, called ptplayer.h.
@@ -184,7 +197,7 @@ Get it from Aminet: http://aminet.net/dev/c/SDI_headers.lha
 
 License:
 
-Written by Frank Wille in 2013, 2016, 2017, 2018, 2019.
+Written by Frank Wille in 2013, 2016, 2017, 2018, 2019, 2020.
 I, the copyright holder of this work, hereby release it into the
 public domain. This applies worldwide.
 
@@ -261,3 +274,19 @@ History:
   OS header file compatibility.
 - Fixed detection of negative fine-tuning (broken due to optimizations
   in V5.1).
+
+6.0:
+- _mt_musicmask works as documented now! Sound effects will never play
+  on the masked channels. Previously it was rather a hint not to use them.
+- Fixed sign-bug in tremolo/vibrato command 7xx (Antiriad/EAB).
+- New function _mt_samplevol may be used to redefine a sample's volume.
+- _mt_playfx now returns a pointer to the selected channel status structure
+  when the sample was scheduled for playing and returns NULL when ignored.
+- Wait 576 ticks for audio DMA instead of 496, which fixes issues with
+  low notes on a few A1200 configurations. (No, this doesn't harm the
+  player's performance, as it is a timer interrupt.)
+- Defining the symbol MINIMAL lets you assemble a minimal version of
+  the player, without the ability to insert sound effects and without
+  master-volume or changing samples volumes.
+- Improved interrupt handling, following a suggestion of Ross/EAB.
+- Minor optimizations.
