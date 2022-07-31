@@ -2,7 +2,7 @@ Short:        ProTracker player w/ support for ext. sfx
 Author:       Frank Wille
 Uploader:     frank@phoenix.owl.de
 Type:         mus/play
-Version:      5.1
+Version:      5.3
 Requires:     Assembler
 Architecture: m68k-amigaos
 
@@ -47,37 +47,65 @@ The master volume is always applied to the music, but does not affect
 external sound effects at all.
 
 
-Selecting the data model:
+How to use:
+
+
+1. Selecting the data model
 
 ptplayer.asm can be configured to support two data models:
 
-1. By default ptplayer.asm assembles into a single code section. The
+a) By default ptplayer.asm assembles into a single code section. The
    interface functions set up a local base register to access data.
    This requires a working RS directive, which is provided by many
    assemblers, like e.g. vasm, PhxAss, Devpac, Basm, AsmOne, SNMA.
 
-2. By defining the SDATA symbol ptplayer.asm assembles into a code
+b) By defining the SDATA symbol ptplayer.asm assembles into a code
    section and a small-data section (called __MERGED). All interface
-   functions require that the base register A4 is set up with the
+   functions expect that the base register A4 is set up with the
    small-data base pointer (provided by the linker through _LinkerDB).
    It uses the NEAR directive, which might work with vasm and PhxAss only.
 
 
-Exported functions:
-(CUSTOM is the custom-chip register set base address $dff000.)
+2. Common usage
 
-_mt_install_cia(a6=CUSTOM, a0=AutoVecBase, d0=PALflag.b)
+a) Install a Level-6 interrupt handler for CIA-B timer interrupts
+   by calling mt_install_cia(). Do this once, during program init.
+
+b) For every new MOD file to play initialize it with mt_init().
+   Most common case is to pass a pointer to the MOD in A0 and set A1
+   and D0 to zero, which will play the song from the beginning.
+   Everything is initialized for replay now, but nothing is played.
+
+c) Set the byte-variable mt_Enable to non-zero to start the replay.
+   Clearing that variable again pauses the song.
+
+d) Stop playing and set all volumes to zero by calling mt_end().
+
+e) Finally, in the cleanup routine of your program, remove the Level-6
+   interrupt handler again and reset all CIA register by calling
+   mt_remove_cia().
+
+
+Exported functions:
+
+Note that the leading underscore disappears when a symbol is referenced
+from C. CUSTOM is the custom-chip register set base address $dff000.
+
+_mt_install_cia(a6=CUSTOM, a0=VectorBase, d0=PALflag.b)
   Install a CIA-B interrupt for calling _mt_music or mt_sfxonly.
   The music module is replayed via _mt_music when _mt_Enable is non-zero.
   Otherwise the interrupt handler calls mt_sfxonly to play sound
-  effects only.
+  effects only. VectorBase is 0 for 68000, otherwise set it to the CPU's
+  VBR register. A non-zero PALflag selects PAL-clock for the CIA timers
+  (NTSC otherwise).
 
 _mt_remove_cia(a6=CUSTOM)
-  Remove the CIA-B music interrupt and restore the old vector.
+  Remove the CIA-B music interrupt, restore the previous handler and
+  reset the CIA timer registers to their original values.
 
 _mt_init(a6=CUSTOM, a0=TrackerModule, a1=Samples|NULL, d0=InitialSongPos.b)
   Initialize a new module.
-  Reset speed to 6, tempo to 125 and start at the given position.
+  Reset speed to 6, tempo to 125 and start at the given song position.
   Master volume is at 64 (maximum).
   When a1 is NULL the samples are assumed to be stored after the patterns.
 
@@ -85,7 +113,7 @@ _mt_end(a6=CUSTOM)
   Stop playing current module.
 
 _mt_soundfx(a6=CUSTOM, a0=SamplePointer,
-           d0=SampleLength.w, d1=SamplePeriod.w, d2=SampleVolume.w)
+            d0=SampleLength.w, d1=SamplePeriod.w, d2=SampleVolume.w)
   Request playing of an external sound effect on the most unused channel.
   This function is for compatibility with the old API only!
   You should call _mt_playfx instead.
@@ -109,7 +137,7 @@ _mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
   are zero!
 
 _mt_musicmask(a6=CUSTOM, d0=ChannelMask.b)
-  Set bits in the mask define which specific channels are reserved
+  Bits set in the mask define which specific channels are reserved
   for music only. Set bit 0 for channel 0, ..., bit 3 for channel 3.
   When calling _mt_soundfx or _mt_playfx with automatic channel selection
   (sfx_cha=-1) then these masked channels will never be picked.
@@ -121,7 +149,7 @@ _mt_mastervol(a6=CUSTOM, d0=MasterVolume.w)
   sound effects (which is desired).
 
 _mt_music(a6=CUSTOM)
-  The replayer routine. Is called automatically after mt_install_cia().
+  The replayer routine. Is called automatically after _mt_install_cia.
 
 
 Exported byte-sized variables:
@@ -129,10 +157,18 @@ Exported byte-sized variables:
 _mt_Enable
   Set this byte to non-zero to play music, zero to pause playing.
   Note that you can still play sound effects, while music is stopped.
+  It is set to 0 by _mt_install_cia.
+
+_mt_SongEnd
+  Set to -1 ($ff) if you want the song to stop automatically when
+  the last position has been played (clears _mt_Enable). Otherwise, the
+  song is restarted and _mt_SongEnd is incremented to count the restarts.
+  It is reset to 0 after _mt_init.
+  BUGS: Automatic stop with $ff doesn't work perfectly yet.
 
 _mt_E8Trigger
   This byte reflects the value of the last E8 command.
-  It is reset to 0 after _mt_init().
+  It is reset to 0 after _mt_init.
 
 _mt_MusicChannels
   This byte defines the number of channels which should be dedicated
@@ -143,11 +179,12 @@ _mt_MusicChannels
 There is also a header file for C compilers, called ptplayer.h.
 It depends on the SDI_compiler.h header file, which implements
 portable macros for defining compiler-specific register arguments.
+Get it from Aminet: http://aminet.net/dev/c/SDI_headers.lha
 
 
 License:
 
-Written by Frank Wille in 2013, 2016, 2017, 2018.
+Written by Frank Wille in 2013, 2016, 2017, 2018, 2019.
 I, the copyright holder of this work, hereby release it into the
 public domain. This applies worldwide.
 
@@ -204,3 +241,23 @@ History:
 - More optimizations in the Timer B interrupt handlers and made it
   PC-relative (asman).
 - Include a public domain license.
+
+5.2:
+- Make it work with broken mods, which have a sample repeat length of zero.
+- Never break looped samples with sound effects, except we have looped
+  samples on all four channels at once!
+- New variable _mt_SongEnd to automatically stop the song when having
+  played the last position. Don't use it! Doesn't work perfectly yet.
+
+5.3:
+- No longer clear the first word of each sample for idle looping.
+  Either we have a good Amiga tracker MOD with repeat-length one, which
+  already cleared that word, or we have a PC tracker MOD with a zero
+  repeat length. In the latter case the idle loop will now point to
+  address $0. Make sure that the word at this address is cleared!
+- Treat samples with a length of one word the same as with zero length
+  as a workaround for broken PC trackers.
+- Changed APTR to void* in the C headers, for better Kickstart 1.x
+  OS header file compatibility.
+- Fixed detection of negative fine-tuning (broken due to optimizations
+  in V5.1).
