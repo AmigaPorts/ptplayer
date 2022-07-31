@@ -6,8 +6,8 @@
  **************************************************/
 
 /*
-  Version 5.3
-  Written by Frank Wille in 2013, 2016, 2017, 2018, 2019.
+  Version 5.4
+  Written by Frank Wille in 2013, 2016, 2017, 2018, 2019, 2020.
 */
 
 #ifndef EXEC_TYPES_H
@@ -70,7 +70,7 @@ void ASM mt_soundfx(REG(a6, void *custom),
 	REG(d1, UWORD SamplePeriod), REG(d2, UWORD SampleVolume));
 
 /*
-  mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
+  SfxChanStatus = mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
     Request playing of a prioritized external sound effect, either on a
     fixed channel or on the most unused one.
     Structure layout of SfxStructure:
@@ -85,6 +85,8 @@ void ASM mt_soundfx(REG(a6, void *custom),
     the older sample is replaced.
     The chosen channel is blocked for music until the effect has
     completely been replayed.
+    Returns pointer to SfxChanStatus when sample was scheduled for
+    playing and NULL when the request was ignored.
 */
 
 typedef struct SfxStructure
@@ -97,7 +99,16 @@ typedef struct SfxStructure
 	UBYTE sfx_pri; /* unsigned priority, must be non-zero */
 } SfxStructure;
 
-void ASM mt_playfx(REG(a6, void *custom),
+typedef struct SfxChanStatus
+{
+  UWORD n_note;
+  UWORD n_cmd;
+  UBYTE n_index;   /* channel index 0..3 */
+  UBYTE n_sfxpri;  /* sfx_pri when playing, becomes 0 when done */
+  /* Rest of structure is currently not exported. Don't rely on it! */
+} SfxChanStatus;
+
+SfxChanStatus * ASM mt_playfx(REG(a6, void *custom),
 	REG(a0, SfxStructure *SfxStructurePointer));
 
 /*
@@ -123,6 +134,16 @@ void ASM mt_mastervol(REG(a6, void *custom),
 	REG(d0, UWORD MasterVolume));
 
 /*
+  mt_samplevol(d0=SampleNumber.w, d1=Volume.b)
+    Redefine a sample's volume. May also be done while the song is playing.
+    Warning: Does not check arguments for valid range! You must have done
+    _mt_init before calling this function!
+    The new volume is persistent. Even when the song is restarted.
+*/
+
+void ASM mt_samplevol(REG(d0, UWORD SampleNumber), REG(d1, UBYTE Volume));
+
+/*
   mt_music(a6=CUSTOM)
     The replayer routine. Is called automatically after mt_install_cia().
 */
@@ -137,16 +158,6 @@ void ASM mt_music(REG(a6, void *custom));
 */
 
 extern UBYTE mt_Enable;
-
-/*
-; mt_SongEnd
-;   Set to -1 if you want the song to stop automatically when
-;   the last position has been played (calls mt_end(). Otherwise, the
-;   song is restarted and mt_SongEnd is incremented to count the restarts.
-;   It is reset to 0 after mt_init().
-/*
-
-extern BYTE mt_SongEnd;
 
 /*
   mt_E8Trigger
