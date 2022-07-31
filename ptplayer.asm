@@ -2,8 +2,8 @@
 ;*    ----- Protracker V2.3B Playroutine -----	  *
 ;**************************************************
 ;
-; Version 5.1
-; Written by Frank Wille in 2013, 2016, 2017, 2018.
+; Version 5.3
+; Written by Frank Wille in 2013, 2016, 2017, 2018, 2019.
 ;
 ; I, the copyright holder of this work, hereby release it into the
 ; public domain. This applies worldwide.
@@ -19,6 +19,86 @@
 ;
 ; Exported functions and variables:
 ; (CUSTOM is the custom-chip register set base address $dff000.)
+;
+; _mt_install_cia(a6=CUSTOM, a0=VectorBase, d0=PALflag.b)
+;   Install a CIA-B interrupt for calling _mt_music or mt_sfxonly.
+;   The music module is replayed via _mt_music when _mt_Enable is non-zero.
+;   Otherwise the interrupt handler calls mt_sfxonly to play sound
+;   effects only. VectorBase is 0 for 68000, otherwise set it to the CPU's
+;   VBR register. A non-zero PALflag selects PAL-clock for the CIA timers
+;   (NTSC otherwise).
+;
+; _mt_remove_cia(a6=CUSTOM)
+;   Remove the CIA-B music interrupt, restore the previous handler and
+;   reset the CIA timer registers to their original values.
+;
+; _mt_init(a6=CUSTOM, a0=TrackerModule, a1=Samples|NULL, d0=InitialSongPos.b)
+;   Initialize a new module.
+;   Reset speed to 6, tempo to 125 and start at the given song position.
+;   Master volume is at 64 (maximum).
+;   When a1 is NULL the samples are assumed to be stored after the patterns.
+;
+; _mt_end(a6=CUSTOM)
+;   Stop playing current module.
+;
+; _mt_soundfx(a6=CUSTOM, a0=SamplePointer,
+;             d0=SampleLength.w, d1=SamplePeriod.w, d2=SampleVolume.w)
+;   Request playing of an external sound effect on the most unused channel.
+;   This function is for compatibility with the old API only!
+;   You should call _mt_playfx instead.
+;
+; _mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
+;   Request playing of a prioritized external sound effect, either on a
+;   fixed channel or on the most unused one.
+;   Structure layout of SfxStructure:
+;     void *sfx_ptr (pointer to sample start in Chip RAM, even address)
+;     WORD sfx_len  (sample length in words)
+;     WORD sfx_per  (hardware replay period for sample)
+;     WORD sfx_vol  (volume 0..64, is unaffected by the song's master volume)
+;     BYTE sfx_cha  (0..3 selected replay channel, -1 selects best channel)
+;     BYTE sfx_pri  (unsigned priority, must be non-zero)
+;   When multiple samples are assigned to the same channel the lower
+;   priority sample will be replaced. When priorities are the same, then
+;   the older sample is replaced.
+;   The chosen channel is blocked for music until the effect has
+;   completely been replayed.
+;
+; _mt_musicmask(a6=CUSTOM, d0=ChannelMask.b)
+;   Bits set in the mask define which specific channels are reserved
+;   for music only. Set bit 0 for channel 0, ..., bit 3 for channel 3.
+;   When calling _mt_soundfx or _mt_playfx with automatic channel selection
+;   (sfx_cha=-1) then these masked channels will never be picked.
+;   The mask defaults to 0.
+;
+; _mt_mastervol(a6=CUSTOM, d0=MasterVolume.w)
+;   Set a master volume from 0 to 64 for all music channels.
+;   Note that the master volume does not affect the volume of external
+;   sound effects (which is desired).
+;
+; _mt_music(a6=CUSTOM)
+;   The replayer routine. Is called automatically after _mt_install_cia.
+;
+; Byte Variables:
+;
+; _mt_Enable
+;   Set this byte to non-zero to play music, zero to pause playing.
+;   Note that you can still play sound effects, while music is stopped.
+;   It is set to 0 by _mt_install_cia.
+;
+; _mt_SongEnd
+;   Set to -1 ($ff) if you want the song to stop automatically when
+;   the last position has been played (clears _mt_Enable). Otherwise, the
+;   song is restarted and _mt_SongEnd is incremented to count the restarts.
+;   It is reset to 0 after _mt_init.
+;
+; _mt_E8Trigger
+;   This byte reflects the value of the last E8 command.
+;   It is reset to 0 after _mt_init.
+;
+; _mt_MusicChannels
+;   This byte defines the number of channels which should be dedicated
+;   for playing music. So sound effects will never use more
+;   than 4 - _mt_MusicChannels channels at once. Defaults to 0.
 ;
 
 		include	"custom.i"
@@ -101,7 +181,7 @@ n_sizeof	rs.b	0
 _mt_install_cia:
 ; Install a CIA-B interrupt for calling _mt_music.
 ; a6 = CUSTOM
-; a0 = AutoVecBase
+; a0 = VectorBase
 ; d0 = PALflag.b (0 is NTSC)
 
 	ifnd	SDATA
@@ -375,21 +455,23 @@ _mt_init:
 	; now we can calculate the base address of the sample data
 	moveq	#10,d0
 	asl.l	d0,d2
-	add.l	#1084,d2
 	lea	(a0,d2.l),a1
-	move.l	a1,d2		; use as pointer for empty samples
+	add.w	#1084,a1
 
-	; save start address of each sample
+	; save start address of each sample and do some fixes for broken mods
 .4:	lea	mt_SampleStarts(a4),a2
+	moveq	#1,d2
 	moveq	#31-1,d0
 .5:	move.l	a1,(a2)+
 	moveq	#0,d1
 	move.w	42(a0),d1
-	beq	.6
-	clr.w	(a1)		; make sure sample starts with two 0-bytes
+	cmp.w	d2,d1		; length 0 and 1 define unused samples
+	bls	.6
 	add.l	d1,d1
 	add.l	d1,a1
-.6:	lea	30(a0),a0
+	bra	.7
+.6:	clr.w	42(a0)		; length 1 means zero -> no sample
+.7:	lea	30(a0),a0
 	dbf	d0,.5
 
 	movem.l	(sp)+,d2/a2
@@ -445,6 +527,7 @@ mt_reset:
 
 	clr.b	mt_SilCntValid(a4)
 	clr.b	mt_E8Trigger(a4)
+	clr.b	mt_SongEnd(a4)
 
 	ifnd	SDATA
 	move.l	(sp)+,a4
@@ -493,11 +576,10 @@ _mt_soundfx:
 ; d2.w = sample volume
 
 	lea	-sfx_sizeof(sp),sp
-	move.l	a0,a1
+	move.l	a0,sfx_ptr(sp)
+	movem.w	d0-d2,sfx_len(sp)
+	move.w	#$ff01,sfx_cha(sp)	; any channel, priority=1
 	move.l	sp,a0
-	move.l	a1,sfx_ptr(a0)
-	movem.w	d0-d2,sfx_len(a0)
-	move.w	#$ff01,sfx_cha(a0)	; any channel, priority=1
 	bsr	_mt_playfx
 	lea	sfx_sizeof(sp),sp
 	rts
@@ -662,25 +744,29 @@ freecnt_valid:
 	; completely, and the channel is now in an idle loop.
 	; Also exclude channels which have set a repeat loop.
 	; Try not to break them!
-	moveq	#0,d1
+	moveq	#0,d3
 	tst.b	mt_chan1+n_looped(a4)
 	bne	.1
-	or.w	#$0080,d1
+	or.w	#$0080,d3
 .1:	tst.b	mt_chan2+n_looped(a4)
 	bne	.2
-	or.w	#$0100,d1
+	or.w	#$0100,d3
 .2:	tst.b	mt_chan3+n_looped(a4)
 	bne	.3
-	or.w	#$0200,d1
+	or.w	#$0200,d3
 .3:	tst.b	mt_chan4+n_looped(a4)
 	bne	.4
-	or.w	#$0400,d1
-
-.4:	and.w	INTREQR(a6),d1
+	or.w	#$0400,d3
+.4:	move.w	INTREQR(a6),d1
+	and.w	d3,d1
 	bne	.6
 
-	; All channels are busy, then it doesn't matter which one we break...
-.5:	move.w	#$0780,d1
+	; All channels are busy. Then break the non-looped ones first...
+	move.w	d3,d1
+	bne	.6
+
+	; ..except there are none. Then it doesn't matter. :|
+	move.w	#$0780,d1
 
 	; first look for the best unused channel
 .6:	moveq	#0,d3
@@ -1025,7 +1111,11 @@ song_step:
 	move.l	mt_mod(a4),a0
 	cmp.b	950(a0),d0		; end of song reached?
 	blo	.1
-	moveq	#0,d0
+	moveq	#0,d0			; restart the song from the beginning
+	addq.b	#1,mt_SongEnd(a4)
+	bne	.2
+	clr.b	mt_Enable(a4)		; stop the song when mt_SongEnd was -1
+.2:	and.b	#$7f,mt_SongEnd(a4)
 .1:	move.b	d0,mt_SongPos(a4)
 
 same_pattern:
@@ -1280,23 +1370,24 @@ mt_playvoice:
 	add.w	(a0,d3.w),a0
 	move.l	a0,n_pertab(a2)
 	move.l	d1,a0
-	cmp.w	#32,d3
+	cmp.w	#2*8,d3
 	shs	n_minusft(a2)
 
 	moveq	#0,d1
 	move.b	(a0)+,d1		; volume
 	move.w	d1,n_volume(a2)
 	move.w	(a0)+,d3		; repeat offset
-	sne	n_looped(a2)
-	beq	no_loop
+	beq	no_offset
 
 	; set repeat
+	add.l	d3,d2
+	add.l	d3,d2
 	move.w	(a0),d0
+;	beq	idle_looping		; @@@ shouldn't happen, d0=n_length!?
 	move.w	d0,n_replen(a2)
+	exg	d0,d3			; n_replen to d3
 	add.w	d3,d0
-	add.l	d3,d2
-	add.l	d3,d2
-	bra	set_loop
+	bra	set_len_start
 
 mult30tab:
 	dc.w	0*30,1*30,2*30,3*30,4*30,5*30,6*30,7*30
@@ -1304,9 +1395,16 @@ mult30tab:
 	dc.w	16*30,17*30,18*30,19*30,20*30,21*30,22*30,23*30
 	dc.w	24*30,25*30,26*30,27*30,28*30,29*30,30*30,31*30
 
-no_loop:
-	move.w	(a0),n_replen(a2)
-set_loop:
+no_offset:
+	move.w	(a0),d3
+	bne	set_replen
+idle_looping:
+	; repeat length zero means idle-looping
+	moveq	#0,d2			; FIXME: expect two zero bytes at $0
+	addq.w	#1,d3
+set_replen:
+	move.w	d3,n_replen(a2)
+set_len_start:
 	move.w	d0,n_length(a2)
 	move.l	d2,n_loopstart(a2)
 	move.l	d2,n_wavestart(a2)
@@ -1314,6 +1412,11 @@ set_loop:
 	move.l	mt_MasterVolTab(a4),a0
 	move.b	(a0,d1.w),d1
 	move.w	d1,AUDVOL(a5)
+
+	; remember if sample is looped
+	; @@@ FIXME: also need to check if n_loopstart equals n_start
+	subq.w	#1,d3
+	sne	n_looped(a2)
 
 set_regs:
 ; d4 = cmd argument | masked E-cmd
@@ -1402,7 +1505,7 @@ set_finetune:
 	add.w	d0,d0
 	add.w	(a0,d0.w),a0
 	move.l	a0,n_pertab(a2)
-	cmp.w	#32,d0 ;;; can it trigger? max: 0xF * 2 = 30, always smaller than 32
+	cmp.w	#2*8,d0
 	shs	n_minusft(a2)
 
 set_period:
@@ -1971,7 +2074,7 @@ mt_finetune:
 	add.w	d0,d0
 	add.w	(a0,d0.w),a0
 	move.l	a0,n_pertab(a2)
-	cmp.w	#32,d0      ;;; Since arg is on 4 bits it can only take values 0..15, 2*d0 is up to 30, and it's always smaller than 32
+	cmp.w	#2*8,d0
 	shs	n_minusft(a2)
 	rts
 
@@ -2895,6 +2998,11 @@ _mt_MusicChannels:
 mt_MusicChannels:
 	ds.b	1
 
+	xdef	_mt_SongEnd
+_mt_SongEnd:
+mt_SongEnd:
+	ds.b	1
+
 
 	else	; !SDATA : single section with local base register
 
@@ -2923,6 +3031,7 @@ mt_SilCntValid	rs.b	1
 mt_Enable	rs.b	1		; exported as _mt_Enable
 mt_E8Trigger	rs.b	1		; exported as _mt_E8Trigger
 mt_MusicChannels rs.b	1		; exported as _mt_MusicChannels
+mt_SongEnd	rs.b	1		; exported as _mt_SongEnd
 
 mt_data:
 	ds.b	mt_Enable
@@ -2934,6 +3043,9 @@ _mt_E8Trigger:
 	ds.b	1
 	xdef	_mt_MusicChannels
 _mt_MusicChannels:
+	ds.b	1
+	xdef	_mt_SongEnd
+_mt_SongEnd:
 	ds.b	1
 
 	endc	; SDATA/!SDATA
