@@ -2,8 +2,8 @@
 ;*    ----- Protracker V2.3B Playroutine -----	  *
 ;**************************************************
 ;
-; Version 6.2
-; Written by Frank Wille in 2013, 2016, 2017, 2018, 2019, 2020, 2021, 2022.
+; Version 6.3
+; Written by Frank Wille in 2013, 2016-2023.
 ;
 ; I, the copyright holder of this work, hereby release it into the
 ; public domain. This applies worldwide.
@@ -13,7 +13,7 @@
 ; Barfly-Asm, SNMA, AsmOne, AsmPro.
 ;
 ; The small data model can be enabled by defining the symbol SDATA. In
-; this case all functions expect a4 to be initialised with the small
+; this case all functions expect a4 to be initialized with the small
 ; data base register. Interrupt functions restore a4 from _LinkerDB.
 ; Small data may work with vasm and PhxAss only.
 ;
@@ -45,7 +45,7 @@
 ;             d0=SampleLength.w, d1=SamplePeriod.w, d2=SampleVolume.w)
 ;   Request playing of an external sound effect on the most unused channel.
 ;   This function is for compatibility with the old API only.
-;   You should call _mt_playfx instead. MINIMAL=0 only.
+;   You may prefer _mt_playfx instead. MINIMAL=0 only.
 ;
 ; channelStatus(d0) = _mt_playfx(a6=CUSTOM, a0=SfxStructurePointer)
 ;   Request playing of a prioritized external sound effect, either on a
@@ -81,11 +81,11 @@
 ; _mt_stopfx(a6=CUSTOM, d0=Channel.b)
 ;   Immediately stop a currently playing sound effect on a channel (0..3)
 ;   and make it available for music, or other effects, again. This is the
-;   only way to stop a looped sound effect (_mt_loopfx), besides stopping
+;   only way to stop a looped sound effect (_mt_loopfx) besides stopping
 ;   replay completely (_mt_end). MINIMAL=0 only.
 ;
 ; _mt_musicmask(a6=CUSTOM, d0=ChannelMask.b)
-;   Bits set in the mask define which specific channels are reserved
+;   Bits set in the ChannelMask define which specific channels are reserved
 ;   for music only. Set bit 0 for channel 0, ..., bit 3 for channel 3.
 ;   When calling _mt_soundfx or _mt_playfx with automatic channel selection
 ;   (sfx_cha=-1) then these masked channels will never be picked.
@@ -104,8 +104,10 @@
 ;   MINIMAL=0 only.
 ;
 ; _mt_channelmask(a6=CUSTOM, d0=ChannelMask.b)
-;  Bits cleared in the mask define which specific channels are muted
+;  Bits cleared in the ChannelMask define which specific channels are muted
 ;  for music replay. Clear bit 0 for channel 0, ..., bit 3 for channel 3.
+;  Additionally a cleared bit prevents any access to the sample pointers
+;  of this channel.
 ;  The mask defaults to all channels unmuted (bits set) and is reset to
 ;  this state on _mt_init and _mt_end. MINIMAL=0 only.
 ;
@@ -119,7 +121,7 @@
 ; _mt_Enable
 ;   Set this byte to non-zero to play music, zero to pause playing.
 ;   Note that you can still play sound effects, while music is stopped.
-;   It is set to 0 by _mt_install_cia.
+;   It is set to 0 by _mt_install_cia. VBLANK_MUSIC=0 only.
 ;
 ; _mt_E8Trigger
 ;   This byte reflects the value of the last E8 command.
@@ -132,9 +134,9 @@
 ;   MINIMAL=0 only.
 ;
 
-; Optionally you can build a minimal version, which includes just
-; the player. No sound effects insert, no master volume, no sample
-; volume, etc. Define the symbol MINIMAL=1 for it.
+; Optionally you can build a minimal version, which includes only
+; the basic player. No sound effects insertion, no master volume, no
+; sample volume, etc. Define the symbol MINIMAL=1 for it.
 	ifnd	MINIMAL
 MINIMAL		equ	0
 	endc
@@ -147,7 +149,7 @@ ENABLE_SAWRECT	equ	1
 	endc
 
 ; Set this if you can guarantee that the word at $0 is cleared and if
-; you want to use if for idle-looping of samples.
+; you want to use it for idle-looping of samples.
 	ifnd	NULL_IS_CLEARED
 NULL_IS_CLEARED	equ	0
 	endc
@@ -501,6 +503,8 @@ mt_TimerBsetrep:
 	else
 	lea	mt_data(pc),a4
 	endc
+
+	ifne	MINIMAL
 	move.l	mt_chan1+n_loopstart(a4),AUD0LC-INTREQ(a0)
 	move.w	mt_chan1+n_replen(a4),AUD0LEN-INTREQ(a0)
 	move.l	mt_chan2+n_loopstart(a4),AUD1LC-INTREQ(a0)
@@ -509,6 +513,26 @@ mt_TimerBsetrep:
 	move.w	mt_chan3+n_replen(a4),AUD2LEN-INTREQ(a0)
 	move.l	mt_chan4+n_loopstart(a4),AUD3LC-INTREQ(a0)
 	move.w	mt_chan4+n_replen(a4),AUD3LEN-INTREQ(a0)
+
+	else	; !MINIMAL
+	tst.b	mt_chan1+n_enable(a4)
+	beq	.1
+	move.l	mt_chan1+n_loopstart(a4),AUD0LC-INTREQ(a0)
+	move.w	mt_chan1+n_replen(a4),AUD0LEN-INTREQ(a0)
+.1:	tst.b	mt_chan2+n_enable(a4)
+	beq	.2
+	move.l	mt_chan2+n_loopstart(a4),AUD1LC-INTREQ(a0)
+	move.w	mt_chan2+n_replen(a4),AUD1LEN-INTREQ(a0)
+.2:	tst.b	mt_chan3+n_enable(a4)
+	beq	.3
+	move.l	mt_chan3+n_loopstart(a4),AUD2LC-INTREQ(a0)
+	move.w	mt_chan3+n_replen(a4),AUD2LEN-INTREQ(a0)
+.3:	tst.b	mt_chan4+n_enable(a4)
+	beq	.4
+	move.l	mt_chan4+n_loopstart(a4),AUD3LC-INTREQ(a0)
+	move.w	mt_chan4+n_replen(a4),AUD3LEN-INTREQ(a0)
+.4:
+	endc
 
 	move.l	(sp)+,a4
 	move.l	(sp)+,a0
@@ -589,7 +613,7 @@ _mt_init:
 	endc
 
 mt_reset:
-; a4 must be initialised with base register
+; a4 must be initialized with base register
 
 	; reset speed and counters
 	move.b	#6,mt_Speed(a4)
@@ -616,7 +640,7 @@ mt_reset:
 	move.b	#2,mt_chan3+n_index(a4)
 	move.b	#3,mt_chan4+n_index(a4)
 
-	; initialise channel DMA and interrupt bits
+	; initialize channel DMA and interrupt bits
 	move.w	#$0001,mt_chan1+n_dmabit(a4)
 	move.w	#$0002,mt_chan2+n_dmabit(a4)
 	move.w	#$0004,mt_chan3+n_dmabit(a4)
@@ -687,8 +711,10 @@ resetch:
 	clr.b	n_sfxpri(a0)
 	clr.b	n_looped(a0)
 	clr.b	n_gliss(a0)
+	ifeq	MINIMAL
 	clr.b	n_musiconly(a0)
 	st	n_enable(a0)
+	endc
 	rts
 
 
@@ -1984,7 +2010,7 @@ do_porta_up:
 	move.w	n_period(a2),d1
 	sub.w	d0,d1
 	cmp.w	#113,d1
-	bhs	.1
+	bge	.1
 	moveq	#113,d1
 .1:	move.w	d1,n_period(a2)
 	move.w	d1,AUDPER(a5)

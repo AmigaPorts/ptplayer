@@ -174,6 +174,8 @@ void ASM mt_samplevol(REG(d0, UWORD SampleNumber), REG(d1, UBYTE Volume));
   mt_channelmask(a6=CUSTOM, d0=ChannelMask.b)
     Bits cleared in the mask define which specific channels are muted
     for music replay. Clear bit 0 for channel 0, ..., bit 3 for channel 3.
+    Additionally a cleared bit prevents any access to the sample pointers
+    of this channel.
     The mask defaults to all channels unmuted (bits set) and is reset to
     this state on mt_init() and mt_end().
 */

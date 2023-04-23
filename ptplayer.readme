@@ -2,7 +2,7 @@ Short:        ProTracker player w/ support for ext. sfx
 Author:       Frank Wille
 Uploader:     frank@phoenix.owl.de
 Type:         mus/play
-Version:      6.2
+Version:      6.3
 Requires:     Assembler
 Architecture: m68k-amigaos
 
@@ -201,6 +201,8 @@ _mt_stopfx(a6=CUSTOM, d0=Channel.b)
 _mt_musicmask(a6=CUSTOM, d0=ChannelMask.b)
   Bits set in the mask define which specific channels are reserved
   for music only. Set bit 0 for channel 0, ..., bit 3 for channel 3.
+  Additionally a cleared bit prevents any access to the sample pointers
+  of this channel.
   When calling _mt_soundfx or _mt_playfx with automatic channel selection
   (sfx_cha=-1) then these masked channels will never be picked.
   The mask defaults to 0. MINIMAL=0 only
@@ -428,3 +430,9 @@ History:
   any time (Marek Duda).
 - Symbol VBLANK_MUSIC skips CIA Timer-A initialization and lets you call
   _mt_music out of your own VBlank interrupt handler.
+
+6.3:
+- MINIMAL version compiles again (broken in V6.2).
+- Avoid potential overflow with command 1 (portamento up).
+- Muted channels by mt_channelmask() no longer touch sample pointer
+  and length registers (AUDxLC, AUDxLEN) (patch by roondar).
